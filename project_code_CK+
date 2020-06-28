@@ -1,0 +1,321 @@
+from google.colab import drive
+drive.mount('/content/drive')
+
+
+!pip install mlxtend
+
+
+import mlxtend
+from mlxtend.image import extract_face_landmarks
+
+
+import os
+import cv2
+import math
+import dlib
+import numpy as np
+import pandas as pd
+from google.colab.patches import cv2_imshow
+
+
+
+
+data_path = 'drive/My Drive/emotion_recognition/ck+'
+data_dir_list = os.listdir(data_path)
+
+
+
+
+num_classes = 7
+names = ['anger','contempt','disgust','fear','happy','sadness','surprise']
+
+num_epoch=10
+
+img_data_list=[]
+image_names = []
+labels = []
+
+for dataset in data_dir_list:
+    img_list=os.listdir(data_path+'/'+ dataset)
+    print ('Loaded the images of dataset-'+'{}\n'.format(dataset))
+    for img in img_list:
+        input_img=cv2.imread(data_path + '/'+ dataset + '/'+ img, cv2.IMREAD_GRAYSCALE)
+        input_img_resize=cv2.resize(input_img,(48,48))
+        img_data_list.append(input_img_resize)
+        image_names.append(img[0:4])
+        labels.append(names.index(dataset))
+    
+        
+img_data = np.array(img_data_list)
+print(img_data.shape)
+
+
+
+
+num_classes = 7
+names = ['anger','contempt','disgust','fear','happy','sadness','surprise']
+
+def getLabel(id):
+    return ['anger','contempt','disgust','fear','happy','sadness','surprise'](id)
+    
+    
+    
+    
+    
+def rotateImage(image, angle):
+    image_center = tuple(np.array(image.shape[1::-1]) / 2)
+    rot_mat = cv2.getRotationMatrix2D(image_center, angle, 1.0)
+    result = cv2.warpAffine(image, rot_mat, image.shape[1::-1], flags=cv2.INTER_LINEAR)
+    return result
+    
+    
+def rotateImage(image, angle):
+    image_center = tuple(np.array(image.shape[1::-1]) / 2)
+    rot_mat = cv2.getRotationMatrix2D(image_center, angle, 1.0)
+    result = cv2.warpAffine(image, rot_mat, image.shape[1::-1], flags=cv2.INTER_LINEAR)
+    return result
+    
+    
+    
+def find_angle(point1, point2):
+    angle_r = math.atan2(point1[1] - point2[1], point1[0] - point2[0]);
+    angle_degree = angle_r * 180 / math.pi;
+    return angle_degree
+    
+    
+    
+def detect_eyes(landmarks):
+    right_eye = np.array([36, 37, 38, 39, 40, 41])
+    left_eye = np.array([42, 43, 44, 45, 46, 47])
+
+    left_eye_center = np.mean(landmarks[left_eye], axis=0)
+    right_eye_center = np.mean(landmarks[right_eye], axis=0)
+
+    return left_eye_center.astype(int), right_eye_center.astype(int) 
+    
+    
+    
+def normalization(input_images, mean, std_dev):
+    normalized_images = []
+    for img in input_images:
+      #Histogram Equilization
+      hist_eqv = cv2.equalizeHist(img)
+
+      #Z-Square equilization
+      zsq_eqv = ((hist_eqv - mean)/std_dev)*255
+
+      #Resize
+      resized_image = cv2.resize(zsq_eqv, (32,32))
+      normalized_images.append(resized_image)
+    return np.array(normalized_images)
+    
+    
+    
+def preprocessing(input_images):
+    preprocessed_faces = []
+    for img in input_images:
+
+        #find landmarks
+        landmarks = extract_face_landmarks(img)
+
+        #detect eye centers
+        left_eye_old, rigth_eye_old= detect_eyes(landmarks)
+
+        #align image      
+        angle = find_angle(left_eye_old, rigth_eye_old)
+        rotated_img = rotateImage(img, angle)
+
+        left_eye, rigth_eye = detect_eyes(extract_face_landmarks(rotated_img))
+
+        # line length
+        D = cv2.norm(np.array(left_eye) - np.array(rigth_eye))
+        
+        # center of the line
+        D_point = [(left_eye[0] + rigth_eye[0]) / 2, (left_eye[1] + rigth_eye[1]) / 2]
+        
+        #new point
+        x_point_new = D_point[0]
+        y_point_new = D_point[1]-(0.6*D)
+
+        # Face ROI
+        x = int(landmarks[0][0])
+        y = int(y_point_new)
+        w = int(landmarks[16][0] - x)
+        h = int(landmarks[8][1] - y_point_new)
+        face_roi = rotated_img[y:y+h, x:x+w]
+        face_roi= cv2.resize(face_roi, dsize=(48, 48), interpolation=cv2.INTER_CUBIC)
+
+
+        preprocessed_faces.append(face_roi)
+    
+    return np.array(preprocessed_faces)
+    
+    
+    
+def augmentation(input_images, input_images_name, labels):
+
+    augmented_data=[]
+    for i in range(len(input_images)):
+
+        from keras.preprocessing.image import ImageDataGenerator, array_to_img, img_to_array, load_img
+        datagen = ImageDataGenerator(
+            rescale=1./255,
+            rotation_range=4,
+            horizontal_flip=True,
+            fill_mode='nearest')
+
+        x = img_to_array(input_images[i])  
+        x = x.reshape((1,) + x.shape)  
+
+        j = 0
+        for batch in datagen.flow(x, batch_size=1,
+                          save_to_dir='drive/My Drive/emotion_recognition/augmented_ckplus_dataset', save_prefix=(input_images_name[i] + '_' + str(labels[i])), save_format='tiff'):
+            
+            j += 1
+            if j > 6:
+                break  
+                
+                
+                
+                
+                
+def create_model(input_shape):
+
+  model = Sequential()
+  model.add(Conv2D(32, (5,5), strides = (1,1), padding="valid", input_shape=input_shape , activation = 'relu', name='conv0'))
+  model.add(BatchNormalization())
+  model.add(MaxPooling2D(pool_size=(2,2), strides=(2,2), name='max_pool_1'))
+
+  model.add(Conv2D(64 , (5,5) ,strides = (1,1) , activation = 'relu' , name = 'conv1'))
+  model.add(MaxPooling2D( (2,2) ,strides = (2,2) , name = 'max_pool_2'))
+  model.add(Dropout(0.5))
+  model.add(Flatten())
+  
+  model.add(Dense(7, activation='softmax', name='fc',kernel_initializer='glorot_normal'))
+
+  return model
+  
+  
+ 
+ #### main code
+  
+  
+  from sklearn.utils import shuffle
+from sklearn.model_selection import train_test_split
+import keras
+from keras.utils import np_utils
+
+
+
+import tensorflow as tf
+from keras import layers
+from keras.layers import Input, Dense, Activation, ZeroPadding2D, BatchNormalization, Flatten, Conv2D
+from keras.layers import AveragePooling2D, MaxPooling2D, Dropout, GlobalMaxPooling2D, GlobalAveragePooling2D
+from keras.models import Model, Sequential
+from keras.preprocessing import image
+
+from keras.optimizers import SGD
+from sklearn.model_selection import KFold 
+
+
+
+preprocessed_data = preprocessing(img_data)
+mean, std_dev = preprocessed_data.mean(), preprocessed_data.std()
+preprocessed_data = normalization(preprocessed_data, mean, std_dev)
+
+
+
+#### model without augmentation
+
+
+
+Y = np_utils.to_categorical(labels, num_classes)
+
+#Shuffle the dataset
+x,y = shuffle(preprocessed_data,Y, random_state=2)
+x = np.reshape(x , (327 , 32, 32,1))
+
+
+
+n_split = 10
+accuracy_matrics = []
+for train_index,test_index in KFold(n_split).split(x):
+  X_train, X_test = x[train_index], x[test_index]
+  y_train, y_test = y[train_index], y[test_index]
+  
+  model = create_model((32,32,1))
+  sgd = SGD(lr=0.001)
+  model.compile(optimizer = sgd , loss = 'binary_crossentropy' , metrics = ["accuracy"])
+
+  model.fit(X_train, y_train,epochs=120)
+  accuracy_matrics.append(model.evaluate(X_test, y_test))
+  
+  print('Model evaluation ',model.evaluate(X_test,y_test))
+  
+  
+  
+average_accuracy = np.mean(accuracy_matrics, axis=0)
+print(average_accuracy[1])
+
+
+
+### Model with data augmentation
+
+
+
+augmentation(preprocessed_data, image_names, labels)
+
+
+
+image_names_augmented = []
+img_data_augmented_list = []
+labels_augmented_list = []
+augmented_images_dir="drive/My Drive/emotion_recognition/augmented_ckplus_dataset"
+for img in sorted(os.listdir(augmented_images_dir)):
+    augmented_img = cv2.imread(augmented_images_dir +'/'+ img, cv2.IMREAD_GRAYSCALE)
+    label = img[5]
+    labels_augmented_list.append(label)
+    image_names_augmented.append(img)
+    img_data_augmented_list.append(augmented_img)
+
+img_data_augmented = np.array(img_data_augmented_list)   
+labels_augmented = np.array(labels_augmented_list)
+
+print(img_data_augmented.shape)
+print(labels_augmented.shape)
+
+
+
+Y = np_utils.to_categorical(labels_augmented, num_classes)
+
+#Shuffle the dataset
+x,y = shuffle(img_data_augmented,Y, random_state=2)
+x = np.reshape(x , (2288 , 32, 32,1))
+
+
+
+
+n_split = 10
+accuracy_matrics = []
+for train_index,test_index in KFold(n_split).split(x):
+  X_train, X_test = x[train_index], x[test_index]
+  y_train, y_test = y[train_index], y[test_index]
+  
+  model = create_model((32,32,1))
+  sgd = SGD(lr=0.001)
+  model.compile(optimizer = sgd , loss = 'binary_crossentropy' , metrics = ["accuracy"])
+
+  model.fit(X_train, y_train,epochs=120)
+  accuracy_matrics.append(model.evaluate(X_test, y_test))
+  
+  print('Model evaluation ',model.evaluate(X_test,y_test))
+  
+  
+  
+  
+  average_accuracy = np.mean(accuracy_matrics, axis=0)
+print(average_accuracy[1]*100)
+
+
+
+
